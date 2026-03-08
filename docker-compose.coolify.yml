@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker Compose for Coolify deployment
+#
+# Key differences from docker-compose.prod.yml:
+#   - No nginx service: Coolify's built-in Traefik proxy handles SSL + routing
+#   - api and web are exposed via Traefik labels (set in Coolify UI)
+#   - Networks use Coolify's naming convention
+#   - SERVICE_FQDN_* vars are injected automatically by Coolify
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: '10m'
+      max-file: '3'
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    <<: *default-logging
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    <<: *default-logging
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 10s
+      timeout:  5s
+      retries:  5
+      start_period: 10s
+
+  # ── NestJS API ────────────────────────────────────────────────────────────────
+  api:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX}/api:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.prod
+    restart: unless-stopped
+    <<: *default-logging
+    environment:
+      NODE_ENV:       production
+      PORT:           3001
+      DATABASE_URL:   postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public&connection_limit=10
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET:     ${JWT_SECRET}
+      CORS_ORIGIN:    ${CORS_ORIGIN}
+      API_PORT:       3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        npx prisma migrate deploy --schema apps/api/prisma/schema.prisma &&
+        node apps/api/dist/main.js
+      "
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/api/v1/health || exit 1']
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 30s
+    # Coolify sẽ tự gán domain và SSL cho service này qua Traefik
+    # Không cần expose port trực tiếp
+
+  # ── Next.js Web ───────────────────────────────────────────────────────────────
+  web:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX}/web:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.prod
+      args:
+        NEXT_PUBLIC_WS_URL:         ${NEXT_PUBLIC_WS_URL}
+        NEXT_PUBLIC_API_URL:        ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_DEMO_BRANCH_ID: ${NEXT_PUBLIC_DEMO_BRANCH_ID:-}
+        NEXT_PUBLIC_MOCK_MODE:      'false'
+    restart: unless-stopped
+    <<: *default-logging
+    environment:
+      NODE_ENV: production
+      PORT:     3000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ || exit 1']
+      interval: 15s
+      timeout:  5s
+      retries:  5
+      start_period: 30s
