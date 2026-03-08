@@ -36,7 +36,7 @@ export class BookingService {
     let booking: Awaited<ReturnType<typeof this.prisma.booking.create>>;
 
     try {
-      booking = await this.prisma.$transaction(async (tx) => {
+      booking = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const table = await tx.table.findUnique({
           where:  { id: dto.tableId },
           select: { id: true, status: true, capacity: true, branchId: true },
@@ -116,7 +116,7 @@ export class BookingService {
   // cancelBooking — all guards INSIDE the transaction (TOCTOU fix)
   // ---------------------------------------------------------------------------
   async cancelBooking(bookingId: string, userId: string) {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // ── Read-then-mutate inside the same tx (eliminates TOCTOU) ──────────
       const booking = await tx.booking.findUnique({
         where:  { id: bookingId },
@@ -155,7 +155,7 @@ export class BookingService {
   // updateBooking — wrapped in $transaction with optimistic locking
   // ---------------------------------------------------------------------------
   async updateBooking(bookingId: string, dto: UpdateBookingDto, staffId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const booking = await tx.booking.findUnique({
         where:  { id: bookingId },
         select: { id: true, version: true, status: true, tableId: true },

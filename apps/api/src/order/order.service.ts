@@ -48,7 +48,7 @@ export class OrderService {
     );
 
     const order = await this.prisma.$transaction(
-      async (tx) => {
+      async (tx: Prisma.TransactionClient) => {
         return tx.order.create({
           data: {
             tableId:   dto.tableId,
@@ -98,7 +98,7 @@ export class OrderService {
   // updateOrderStatus — wrapped in $transaction
   // ---------------------------------------------------------------------------
   async updateOrderStatus(orderId: string, dto: UpdateOrderStatusDto) {
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const order = await tx.order.findUnique({
         where:  { id: orderId },
         select: { id: true, status: true, tableId: true, table: { select: { branchId: true } } },

@@ -36,7 +36,7 @@ export class CheckoutService {
 
     // ── 3. Atomic transaction ────────────────────────────────────────────────
     const payment = await this.prisma.$transaction(
-      async (tx) => {
+      async (tx: Prisma.TransactionClient) => {
         // Mark all orders as SERVED
         await tx.order.updateMany({
           where: { id: { in: orders.map((o) => o.id) } },

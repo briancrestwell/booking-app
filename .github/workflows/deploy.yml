@@ -49,6 +49,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate Prisma client (API)
+        run: cd apps/api && npx prisma generate
+
       - name: Type check — shared
         run: cd packages/shared && npx tsc --noEmit
 
