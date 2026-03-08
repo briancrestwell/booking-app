@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-color: #1B6FEB; /* overridden per-page via inline style from restaurant store */
+    --background: 0 0% 97%;
+    --foreground: 220 13% 13%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 13% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 13% 13%;
+    --primary: 217 91% 51%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 32% 91%;
+    --secondary-foreground: 220 13% 13%;
+    --muted: 214 20% 93%;
+    --muted-foreground: 215 13% 48%;
+    --accent: 214 32% 91%;
+    --accent-foreground: 220 13% 13%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 20% 89%;
+    --input: 214 20% 89%;
+    --ring: 217 91% 51%;
+    --radius: 0.875rem;
+  }
+
+  /* ── Reset / base ───────────────────────────────────── */
+  *, *::before, *::after {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  html {
+    /* Prevent iOS double-tap zoom while keeping pinch zoom */
+    touch-action: manipulation;
+    /* Momentum scrolling */
+    -webkit-overflow-scrolling: touch;
+    /* Prevent pull-to-refresh browser chrome interference */
+    overscroll-behavior-y: contain;
+    /* Prevent font inflation on rotation */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Full viewport height on mobile browsers */
+    height: -webkit-fill-available;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    /* Crisp text on all screens */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Prevent content jumping when sheets open */
+    overscroll-behavior: none;
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
+  }
+
+  /* Interactive elements — consistent press feedback */
+  button, a, [role="button"] {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* Inputs — prevent iOS zoom on focus (font-size must be ≥ 16px) */
+  input, textarea, select {
+    font-size: 16px;
+  }
+
+  /* Smooth scrolling only when user hasn't opted out */
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+}
+
+/* ── Utilities ──────────────────────────────────────── */
+@layer utilities {
+  /* Safe area insets for notch / home indicator */
+  .pt-safe  { padding-top: max(env(safe-area-inset-top), 0px); }
+  .pb-safe  { padding-bottom: max(env(safe-area-inset-bottom), 16px); }
+  .pl-safe  { padding-left: max(env(safe-area-inset-left), 0px); }
+  .pr-safe  { padding-right: max(env(safe-area-inset-right), 0px); }
+  .mb-safe  { margin-bottom: max(env(safe-area-inset-bottom), 0px); }
+
+  /* Hide scrollbar while keeping scroll functionality */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Active press scale — tactile feedback */
+  .tap-scale { @apply transition-transform duration-100 active:scale-95; }
+  .tap-opacity { @apply transition-opacity duration-100 active:opacity-70; }
+
+  /* Full safe height — fills screen including dynamic bar on iOS */
+  .h-screen-safe { height: 100dvh; }
+
+  /* Horizontal pill scroll for category tabs */
+  .scroll-x-snap {
+    @apply flex overflow-x-auto no-scrollbar gap-2;
+    scroll-snap-type: x mandatory;
+  }
+  .scroll-x-snap > * {
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+}

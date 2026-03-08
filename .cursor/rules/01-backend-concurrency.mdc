@@ -1,0 +1,53 @@
+---
+description: Backend concurrency — mandatory Redis distributed lock pattern for table booking
+globs: apps/api/**/*.ts
+alwaysApply: false
+---
+
+# Backend Concurrency — Redis Distributed Locks
+
+Every table-booking operation **MUST** acquire a Redis lock before touching the database.
+
+## Lock Specification
+- **Key format:** `lock:booking:table:{tableId}:{slotId}`
+- **Mechanism:** Redis `SET NX PX` (atomic set-if-not-exists with TTL)
+- **TTL:** 5 minutes (300,000 ms) — must be released explicitly on success/failure
+- **On failure to acquire:** throw `ConflictException` immediately (HTTP 409)
+
+## Canonical Pattern
+
+```typescript
+// ✅ CORRECT — always wrap with lock
+async bookTable(dto: CreateBookingDto): Promise<Booking> {
+  const lockKey = `lock:booking:table:${dto.tableId}:${dto.slotId}`;
+  const lockToken = randomUUID();
+
+  const acquired = await this.redis.set(lockKey, lockToken, 'NX', 'PX', 300_000);
+  if (!acquired) throw new ConflictException('Table is being booked. Retry shortly.');
+
+  try {
+    return await this.prisma.$transaction(async (tx) => {
+      // ... booking logic inside transaction
+    });
+  } finally {
+    // Release only if we own the lock (Lua script for atomicity)
+    await this.redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey, lockToken);
+  }
+}
+```
+
+```lua
+-- RELEASE_LOCK_SCRIPT (store as constant)
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+```
+
+## Rules
+- ❌ NEVER skip the lock for any booking or slot mutation
+- ❌ NEVER use `SET` without `NX` — that is not atomic
+- ❌ NEVER delete the lock without the ownership check (Lua script above)
+- ✅ Always release in a `finally` block
+- ✅ Lock key MUST include both `tableId` AND `slotId` for granular locking

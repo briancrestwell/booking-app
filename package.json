@@ -1,0 +1,23 @@
+{
+  "name": "booking-app",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "yarn workspace @booking/web dev",
+    "dev:api": "yarn workspace @booking/api start:dev",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:up:tools": "docker compose --profile dev-tools up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d postgres redis",
+    "db:migrate": "yarn workspace @booking/api prisma migrate dev",
+    "db:studio": "yarn workspace @booking/api prisma studio"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "yarn": ">=1.22.0"
+  }
+}

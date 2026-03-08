@@ -1,0 +1,51 @@
+---
+description: Backend database ACID — mandatory Prisma transactions for booking and payment mutations
+globs: apps/api/**/*.ts
+alwaysApply: false
+---
+
+# Database ACID — Prisma Transactions
+
+All **booking** and **payment** mutations MUST be wrapped in `prisma.$transaction`.
+
+## When a Transaction is MANDATORY
+| Operation | Reason |
+|---|---|
+| Create/update/cancel booking | Atomic seat reservation + audit log |
+| Process payment | Debit, update booking status, emit event atomically |
+| Order submission | Insert order items + update table status |
+| Refund | Payment record + booking state in one unit |
+
+## Canonical Pattern
+
+```typescript
+// ✅ CORRECT — interactive transaction with explicit tx client
+async createBooking(dto: CreateBookingDto, userId: string) {
+  return this.prisma.$transaction(async (tx) => {
+    const table = await tx.table.findUnique({
+      where: { id: dto.tableId },
+      select: { id: true, status: true },
+    });
+    if (table?.status !== 'AVAILABLE') throw new ConflictException('Table unavailable');
+
+    const booking = await tx.booking.create({ data: { ...dto, userId } });
+    await tx.table.update({ where: { id: dto.tableId }, data: { status: 'RESERVED' } });
+    await tx.auditLog.create({ data: { action: 'BOOKING_CREATED', entityId: booking.id, userId } });
+
+    return booking;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+```
+
+```typescript
+// ❌ WRONG — multiple awaits without a transaction (race condition)
+const booking = await this.prisma.booking.create({ data: dto });
+await this.prisma.table.update({ ... }); // NOT atomic
+```
+
+## Rules
+- ❌ NEVER perform multi-step DB mutations outside `$transaction`
+- ❌ NEVER use the top-level `this.prisma` client inside a transaction callback — use `tx`
+- ✅ Use `isolationLevel: Serializable` for booking/payment to prevent phantom reads
+- ✅ Keep transactions short — do NOT perform HTTP calls or heavy computation inside
+- ✅ After a transaction completes, emit Socket.IO events (outside the transaction block)

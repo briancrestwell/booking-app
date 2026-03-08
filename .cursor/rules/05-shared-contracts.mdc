@@ -1,0 +1,60 @@
+---
+description: Shared contracts — Zod schemas in packages/shared are the single source of truth for all API types
+globs: packages/shared/**/*.ts
+alwaysApply: false
+---
+
+# Shared Contracts — `packages/shared`
+
+`packages/shared` is the **single source of truth** for all data contracts between `apps/web` and `apps/api`.
+
+## Structure
+
+```
+packages/shared/src/
+├── schemas/          # Zod schemas (one file per domain)
+│   ├── booking.schema.ts
+│   ├── order.schema.ts
+│   ├── table.schema.ts
+│   └── user.schema.ts
+├── types/            # TypeScript types inferred from schemas
+│   └── index.ts      # re-exports all z.infer<> types
+├── constants/        # Enums, status codes, magic numbers
+│   └── index.ts
+└── query-keys.ts     # TanStack Query key factory
+```
+
+## Pattern: Schema-First
+
+```typescript
+// packages/shared/src/schemas/booking.schema.ts
+import { z } from 'zod';
+
+export const CreateBookingSchema = z.object({
+  tableId: z.string().uuid(),
+  slotId: z.string().uuid(),
+  guestCount: z.number().int().min(1).max(20),
+  specialRequests: z.string().max(500).optional(),
+});
+
+export type CreateBookingDto = z.infer<typeof CreateBookingSchema>;
+```
+
+```typescript
+// apps/api — use schema for NestJS validation pipe
+@UsePipes(new ZodValidationPipe(CreateBookingSchema))
+@Post()
+create(@Body() dto: CreateBookingDto) { ... }
+
+// apps/web — use schema for React Hook Form resolver
+const form = useForm<CreateBookingDto>({
+  resolver: zodResolver(CreateBookingSchema),
+});
+```
+
+## Rules
+- ❌ NEVER duplicate type definitions in `apps/web` or `apps/api`
+- ❌ NEVER import from `apps/*` inside `packages/shared`
+- ✅ All API request/response bodies must have a corresponding Zod schema in `packages/shared`
+- ✅ NestJS DTOs and RHF form types must be `z.infer<>` — never hand-written interfaces for API shapes
+- ✅ Query key factories must live in `packages/shared/src/query-keys.ts`

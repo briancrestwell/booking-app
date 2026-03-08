@@ -1,0 +1,427 @@
+// =============================================================================
+// Prisma Schema — F&B Table Booking & Ordering Platform
+// =============================================================================
+// Indexing strategy summary:
+//   • Queries that filter by status + time range (table availability, active
+//     bookings) use composite indexes so Postgres can satisfy the WHERE clause
+//     and ORDER BY entirely from the index without a heap scan.
+//   • High-cardinality FK columns (userId, tableId, branchId, bookingId) are
+//     individually indexed to accelerate JOIN lookups.
+//   • Columns used in ORDER BY (scheduledAt, createdAt) are included in
+//     composite indexes as trailing columns to avoid an extra sort step.
+//   • Unique constraints double as implicit indexes (email, slug).
+//   • Full-text search on MenuItem (name, description) is handled at the
+//     application layer via pg_trgm (enabled in docker/postgres/init.sql);
+//     no explicit Prisma index is added for trgm — migrations add it raw.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  CUSTOMER
+  STAFF
+  MANAGER
+  ADMIN
+}
+
+enum TableStatus {
+  AVAILABLE
+  // Locked by a Redis distributed lock while a booking is in-flight.
+  // Transitions: AVAILABLE → LOCKED (Redis SET NX) → RESERVED or AVAILABLE.
+  LOCKED
+  RESERVED
+  OCCUPIED
+  MAINTENANCE
+}
+
+enum BookingStatus {
+  PENDING     // Created, awaiting confirmation
+  CONFIRMED   // Confirmed by staff or auto-confirmed
+  SEATED      // Guests have arrived and been seated
+  COMPLETED   // Meal finished, table cleared
+  CANCELLED
+  NO_SHOW
+}
+
+enum OrderStatus {
+  PENDING     // Submitted, not yet seen by kitchen
+  CONFIRMED   // Acknowledged by kitchen
+  PREPARING
+  READY       // Ready for serving
+  SERVED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  QR_CODE
+  ONLINE_BANKING
+  VOUCHER
+}
+
+// =============================================================================
+// USER
+// =============================================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole @default(CUSTOMER)
+  avatarUrl    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookings     Booking[]
+  orders       Order[]
+  payments     Payment[]
+  // Staff member who last updated a booking
+  bookingUpdates Booking[] @relation("BookingUpdatedBy")
+
+  // Index for auth lookup (email is already unique → implicit index).
+  // Composite for staff dashboards filtering by role + active status.
+  @@index([role, isActive])
+  @@map("users")
+}
+
+// =============================================================================
+// RESTAURANT & BRANCH
+// =============================================================================
+
+// Top-level brand entity. One Restaurant → many Branches.
+// Enables SaaS multi-tenancy or future franchise expansion.
+model Restaurant {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique  // URL-safe identifier, e.g. "the-grand-bistro"
+  logoUrl     String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branches    Branch[]
+
+  @@map("restaurants")
+}
+
+model Branch {
+  id           String     @id @default(uuid())
+  restaurantId String
+  name         String
+  address      String
+  city         String
+  phone        String?
+  email        String?
+  timezone     String     @default("Asia/Bangkok")
+  openingHours Json       // { mon: {open:"09:00", close:"22:00"}, ... }
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  tables       Table[]
+  categories   Category[]
+  bookings     Booking[]
+  slots        TimeSlot[]
+
+  // Most queries filter by restaurantId first, then narrow by isActive.
+  @@index([restaurantId, isActive])
+  @@map("branches")
+}
+
+// =============================================================================
+// TIME SLOTS
+// =============================================================================
+
+// Pre-generated or rule-based booking windows (e.g., 18:00–20:00).
+// Separating slots from Booking allows capacity management per slot.
+model TimeSlot {
+  id           String   @id @default(uuid())
+  branchId     String
+  label        String   // "Dinner — 18:00"
+  startTime    DateTime // Full timestamp; date part = the slot's calendar date
+  endTime      DateTime
+  maxCapacity  Int      // Total seats bookable in this slot across all tables
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  branch       Branch    @relation(fields: [branchId], references: [id])
+  bookings     Booking[]
+
+  // Critical for availability queries:
+  //   WHERE branchId = $1 AND startTime >= $2 AND isActive = true
+  // The composite covers the filter and avoids a heap fetch for the bool.
+  @@index([branchId, startTime, isActive])
+  @@map("time_slots")
+}
+
+// =============================================================================
+// TABLE
+// =============================================================================
+
+model Table {
+  id         String      @id @default(uuid())
+  branchId   String
+  number     Int         // Display number (e.g., Table 7)
+  section    String?     // "Terrace", "Private Room", "Bar"
+  capacity   Int
+  status     TableStatus @default(AVAILABLE)
+  isActive   Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  branch     Branch    @relation(fields: [branchId], references: [id])
+  bookings   Booking[]
+  orders     Order[]
+
+  // Core availability query:
+  //   WHERE branchId = $1 AND status = 'AVAILABLE' AND capacity >= $2
+  // Composite on (branchId, status, capacity) lets Postgres use index-only
+  // scan for the most common table-search pattern.
+  @@index([branchId, status, capacity])
+  // Unique table number per branch
+  @@unique([branchId, number])
+  @@map("tables")
+}
+
+// =============================================================================
+// MENU CATALOG
+// =============================================================================
+
+model Category {
+  id          String     @id @default(uuid())
+  branchId    String
+  name        String
+  description String?
+  imageUrl    String?
+  sortOrder   Int        @default(0)
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  branch      Branch     @relation(fields: [branchId], references: [id])
+  menuItems   MenuItem[]
+
+  @@index([branchId, isActive, sortOrder])
+  @@map("categories")
+}
+
+model MenuItem {
+  id          String   @id @default(uuid())
+  categoryId  String
+  name        String
+  description String?
+  imageUrl    String?
+  // Store in minor currency units (satang / cents) to avoid float errors.
+  priceSatang Int
+  isAvailable Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  tags        String[] // ["spicy", "vegetarian", "chef-special"]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category    Category    @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+
+  // Menu listing query: categoryId + availability + sort
+  @@index([categoryId, isAvailable, sortOrder])
+  @@map("menu_items")
+}
+
+// =============================================================================
+// BOOKING
+// =============================================================================
+
+model Booking {
+  id              String        @id @default(uuid())
+  branchId        String
+  tableId         String
+  slotId          String
+  userId          String
+  updatedById     String?       // Staff member who last modified
+
+  guestCount      Int
+  scheduledAt     DateTime      // Denormalised from slot.startTime for fast range queries
+  status          BookingStatus @default(PENDING)
+  specialRequests String?
+  internalNotes   String?
+
+  // Optimistic concurrency: increment on every update to detect stale writes.
+  version         Int           @default(0)
+
+  confirmedAt     DateTime?
+  seatedAt        DateTime?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  branch          Branch   @relation(fields: [branchId], references: [id])
+  table           Table    @relation(fields: [tableId], references: [id])
+  slot            TimeSlot @relation(fields: [slotId], references: [id])
+  user            User     @relation(fields: [userId], references: [id])
+  updatedBy       User?    @relation("BookingUpdatedBy", fields: [updatedById], references: [id])
+
+  orders          Order[]
+  payment         Payment?
+
+  // ① Availability check: find bookings that overlap a requested slot.
+  //    WHERE tableId = $1 AND slotId = $2 AND status NOT IN ('CANCELLED','NO_SHOW')
+  @@index([tableId, slotId, status])
+
+  // ② Customer "my bookings" page:
+  //    WHERE userId = $1 ORDER BY scheduledAt DESC
+  @@index([userId, scheduledAt])
+
+  // ③ Branch operations dashboard:
+  //    WHERE branchId = $1 AND scheduledAt BETWEEN $2 AND $3 AND status = $4
+  @@index([branchId, scheduledAt, status])
+
+  @@map("bookings")
+}
+
+// =============================================================================
+// ORDER & ORDER ITEMS
+// =============================================================================
+
+model Order {
+  id         String      @id @default(uuid())
+  bookingId  String?     // Null for walk-in orders without a prior booking
+  tableId    String
+  userId     String      // Staff who created the order or customer (app order)
+  status     OrderStatus @default(PENDING)
+  notes      String?
+
+  // Denormalised total (in satang) — kept in sync by the service layer
+  // inside a $transaction alongside OrderItem mutations.
+  totalSatang Int        @default(0)
+
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  booking    Booking?    @relation(fields: [bookingId], references: [id])
+  table      Table       @relation(fields: [tableId], references: [id])
+  user       User        @relation(fields: [userId], references: [id])
+  items      OrderItem[]
+  payment    Payment?    @relation("OrderPayment")
+
+  // Kitchen display: fetch open orders for a branch sorted by creation time.
+  //   WHERE tableId = $1 AND status NOT IN ('SERVED','CANCELLED')
+  @@index([tableId, status, createdAt])
+
+  // Booking-level order history:
+  //   WHERE bookingId = $1
+  @@index([bookingId])
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String   @id @default(uuid())
+  orderId      String
+  menuItemId   String
+  quantity     Int
+  // Snapshot the price at order time — menu prices can change later.
+  unitSatang   Int
+  notes        String?  // Per-item special instructions ("no coriander")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem     MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("order_items")
+}
+
+// =============================================================================
+// PAYMENT
+// =============================================================================
+
+model Payment {
+  id              String        @id @default(uuid())
+  bookingId       String?       @unique  // 1-to-1 with Booking
+  orderId         String?       @unique  // or 1-to-1 with Order (walk-in)
+  userId          String
+
+  amountSatang    Int
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+
+  // External payment gateway reference (Stripe charge ID, PromptPay ref, etc.)
+  gatewayRef      String?       @unique
+  gatewayResponse Json?         // Raw webhook payload for audit
+
+  paidAt          DateTime?
+  refundedAt      DateTime?
+  refundSatang    Int?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  booking         Booking?      @relation(fields: [bookingId], references: [id])
+  order           Order?        @relation("OrderPayment", fields: [orderId], references: [id])
+  user            User          @relation(fields: [userId], references: [id])
+
+  // Finance reporting: status + date range
+  @@index([status, createdAt])
+  // Reconciliation lookup by gateway reference (already unique → implicit index,
+  // but explicit here for clarity and partial-index potential in raw migrations).
+  @@index([gatewayRef])
+  @@map("payments")
+}
+
+// =============================================================================
+// AUDIT LOG
+// =============================================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  branchId   String?
+  userId     String?          // staff who performed the action
+  action     String           // e.g. "BOOKING_CREATED", "PAYMENT_CONFIRMED"
+  category   String           // e.g. "AUTH", "TABLE", "ORDER", "PAYMENT"
+  targetType String?          // "Booking", "Order", "Table", "Staff"
+  targetId   String?
+  outcome    String           // "SUCCESS" | "FAILURE"
+  meta       Json?            // arbitrary context (old value, new value, etc.)
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([branchId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}

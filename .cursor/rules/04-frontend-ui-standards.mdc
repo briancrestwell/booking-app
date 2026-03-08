@@ -1,0 +1,47 @@
+---
+description: Frontend UI standards — mobile-first, pixel-perfect Shadcn/Tailwind, Next.js App Router patterns
+globs: apps/web/**/*.tsx
+alwaysApply: false
+---
+
+# Frontend UI Standards
+
+## Mobile-First Requirement
+- **All layouts start from mobile** (`base` styles = mobile) then scale up with `sm:`, `md:`, `lg:`
+- Touch targets minimum **44×44px** (`min-h-[44px] min-w-[44px]`)
+- Tap-friendly spacing: minimum `p-3` on interactive elements
+
+```tsx
+// ✅ CORRECT — mobile-first responsive
+<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+
+// ❌ WRONG — desktop-first (using max-* to downscale)
+<div className="grid grid-cols-3 max-sm:grid-cols-1">
+```
+
+## Component Rules
+- **Always** use Shadcn UI primitives (`Button`, `Card`, `Dialog`, `Sheet`, etc.) — do not build from scratch
+- Extend Shadcn with `cn()` (from `@/lib/utils`) — never override with inline styles
+- Loading states: use Shadcn `Skeleton` — no spinners unless inside a `Button`
+- Error states: use `Alert` variant `destructive`
+
+```tsx
+// ✅ CORRECT
+import { Button } from '@/components/ui/button';
+<Button variant="destructive" size="lg" className="w-full sm:w-auto">Cancel Booking</Button>
+```
+
+## Next.js App Router Patterns
+- Server Components by default — add `'use client'` only when necessary (event handlers, hooks, browser APIs)
+- Data fetching in Server Components via `async/await` — NOT in `useEffect`
+- Route handlers in `app/api/` must validate input with shared Zod schemas from `packages/shared`
+- Use `loading.tsx` and `error.tsx` per route segment
+
+## Typography & Colour
+- Use the design token CSS variables (`--primary`, `--muted`, `--destructive`, etc.) — never hardcode hex/rgb
+- Body text minimum `text-sm` (14px); never below `text-xs` for readable content
+
+## Accessibility
+- All interactive elements must have accessible labels (`aria-label` or visible text)
+- `Dialog` and `Sheet` components must trap focus correctly (Shadcn handles this by default)
+- Colour contrast must meet WCAG AA

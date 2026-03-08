@@ -1,0 +1,52 @@
+# .dockerignore — exclude files from Docker build context to keep images small
+# and prevent secrets from leaking into layers.
+
+# Version control
+.git
+.gitignore
+.github
+
+# Local env files (secrets must never enter image layers)
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Build artefacts
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+**/coverage
+
+# Logs
+**/*.log
+**/logs
+
+# IDE / OS
+.DS_Store
+**/.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+
+# Tests
+**/__tests__
+**/*.test.ts
+**/*.spec.ts
+**/jest.config.*
+
+# Docker files (not needed inside containers)
+docker-compose*.yml
+**/Dockerfile*
+nginx
+
+# Prisma migrations source (schema + migrations copied explicitly)
+# Keep: apps/api/prisma/  (copied in Dockerfile)
+
+# Misc
+README.md
+*.md
+.cursorrules
+.cursor

@@ -1,0 +1,44 @@
+---
+description: Enterprise F&B Table Booking & Ordering App — project overview and monorepo structure
+alwaysApply: true
+---
+
+# Project Overview
+
+Enterprise-ready F&B Table Booking & Ordering Web App.
+
+## Key Non-Negotiables
+- **Zero double-bookings** via Redis distributed locks
+- **ACID transactions** for every booking/payment mutation
+- **Real-time** kitchen/POS sync via Socket.IO
+- **Mobile-first, pixel-perfect** UI with Shadcn + TailwindCSS
+
+## Monorepo Layout
+
+```
+/
+├── apps/
+│   ├── web/          # Next.js 14 App Router frontend
+│   └── api/          # NestJS backend
+├── packages/
+│   └── shared/       # Shared Zod schemas, TS types, constants
+├── docker-compose.yml
+└── .cursor/rules/
+```
+
+## Package Responsibilities
+| Package | Tech | Responsibility |
+|---|---|---|
+| `apps/web` | Next.js, Tailwind, Shadcn, Zustand, TanStack Query | UI, routing, client state |
+| `apps/api` | NestJS, Prisma, Redis, Socket.IO | Business logic, DB, realtime |
+| `packages/shared` | Zod, TypeScript | Contracts shared between web & api |
+
+## Naming Conventions
+- Files: `kebab-case` everywhere
+- React components: `PascalCase`
+- NestJS classes: `PascalCase`; services/controllers end in `Service`/`Controller`
+- DB models: `PascalCase` (Prisma); table names `snake_case`
+- Env vars: `SCREAMING_SNAKE_CASE`
+
+## Imports
+- Always use path aliases (`@web/`, `@api/`, `@shared/`) — never relative `../../`

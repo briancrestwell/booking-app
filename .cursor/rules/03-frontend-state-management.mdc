@@ -1,0 +1,70 @@
+---
+description: Frontend state management — strict separation of TanStack Query (server state) and Zustand (client state)
+globs: apps/web/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Frontend State Management
+
+**Rule: Server state and client state must NEVER be mixed.**
+
+## Taxonomy
+
+| State Type | Tool | Examples |
+|---|---|---|
+| Server / async | TanStack Query (`useQuery`, `useMutation`) | Bookings list, menu items, table availability |
+| UI / ephemeral client | Zustand store | Cart contents, selected table, modal open state, active filters |
+
+## TanStack Query — Server State
+
+```typescript
+// ✅ CORRECT — query key is structured [scope, id?, params?]
+const { data: booking } = useQuery({
+  queryKey: ['bookings', bookingId],
+  queryFn: () => api.getBooking(bookingId),
+  staleTime: 30_000,
+});
+
+// ✅ CORRECT — mutation invalidates related queries
+const { mutate: createBooking } = useMutation({
+  mutationFn: api.createBooking,
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bookings'] }),
+});
+```
+
+```typescript
+// ❌ WRONG — storing API response in useState
+const [bookings, setBookings] = useState([]);
+useEffect(() => { fetch('/api/bookings').then(...).then(setBookings) }, []);
+```
+
+## Zustand — Client State
+
+```typescript
+// ✅ CORRECT — one store per domain slice; NO server data stored here
+interface CartStore {
+  items: OrderItem[];
+  addItem: (item: OrderItem) => void;
+  clearCart: () => void;
+}
+export const useCartStore = create<CartStore>((set) => ({
+  items: [],
+  addItem: (item) => set((s) => ({ items: [...s.items, item] })),
+  clearCart: () => set({ items: [] }),
+}));
+```
+
+```typescript
+// ❌ WRONG — fetching inside Zustand and storing remote data
+fetchBookings: async () => {
+  const data = await api.getBookings(); // server state belongs in TanStack Query
+  set({ bookings: data });
+}
+```
+
+## Rules
+- ❌ NEVER call `fetch`/`axios` directly inside a Zustand action
+- ❌ NEVER cache API responses in `useState` or Zustand
+- ✅ Query keys must be arrays; use `@shared/query-keys.ts` constants
+- ✅ Optimistic updates are allowed in `useMutation` `onMutate` with rollback in `onError`
+- ✅ Socket.IO real-time events should update TanStack Query cache via `queryClient.setQueryData`

@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1 — deps
+#   Install production + dev dependencies so we can run nest build / prisma.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+
+# Install OS libs needed by Prisma query engine (OpenSSL)
+RUN apk add --no-cache openssl libc6-compat
+
+WORKDIR /app
+
+# Copy workspace manifests first (layer cache optimisation)
+COPY package.json package-lock.json ./
+COPY apps/api/package.json           ./apps/api/
+COPY packages/shared/package.json    ./packages/shared/
+
+# npm ci for reproducible installs; include devDependencies for build step
+RUN npm ci --prefer-offline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 — builder
+#   Compile TypeScript → JavaScript via `nest build` (webpack bundle).
+#   Also generate the Prisma client.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM deps AS builder
+
+WORKDIR /app
+
+# Copy shared package source (required by @booking/shared alias)
+COPY packages/shared ./packages/shared
+
+# Copy API source
+COPY apps/api ./apps/api
+
+# Generate Prisma client into node_modules
+RUN cd apps/api && npx prisma generate
+
+# Build: outputs webpack bundle to apps/api/dist/main.js
+RUN cd apps/api && npm run build
+
+# Prune devDependencies — keep only production deps for the final image
+RUN npm ci --omit=dev --prefer-offline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3 — runner (final image)
+#   Minimal alpine node image.  Run as non-root user `node` (uid 1000).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+
+# Prisma needs OpenSSL at runtime
+RUN apk add --no-cache openssl
+
+# Drop root: use the built-in `node` user
+USER node
+
+WORKDIR /app
+
+# Copy pruned node_modules (owned by root during copy, readable by node user)
+COPY --chown=node:node --from=builder /app/node_modules          ./node_modules
+COPY --chown=node:node --from=builder /app/apps/api/node_modules ./apps/api/node_modules
+COPY --chown=node:node --from=builder /app/apps/api/dist         ./apps/api/dist
+
+# Prisma schema is needed at runtime for migrations / schema introspection
+COPY --chown=node:node apps/api/prisma ./apps/api/prisma
+
+# Prisma generated client (inside node_modules — already copied above).
+# If using custom output path, also copy it here.
+
+ENV NODE_ENV=production
+ENV PORT=3001
+
+EXPOSE 3001
+
+# Run migration then start the server in a single command.
+# The entrypoint script allows the CI/CD pipeline to inject DATABASE_URL etc.
+CMD ["node", "apps/api/dist/main.js"]

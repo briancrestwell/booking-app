@@ -1,0 +1,63 @@
+---
+description: Real-time Socket.IO patterns for kitchen/POS sync — backend emission and frontend subscription rules
+globs: **/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Real-Time Socket.IO — Kitchen/POS Sync
+
+## Event Namespace Convention
+| Namespace | Subscribers | Purpose |
+|---|---|---|
+| `/kitchen` | Kitchen display system | New orders, order status updates |
+| `/pos` | POS terminals | Booking status, payment events |
+| `/tables` | Frontend clients | Table availability changes |
+
+## Backend — Emit AFTER Transaction Commits
+
+```typescript
+// ✅ CORRECT — emit outside the Prisma transaction
+async createOrder(dto: CreateOrderDto) {
+  const order = await this.prisma.$transaction(async (tx) => {
+    // ... create order, update table status ...
+    return newOrder;
+  });
+
+  // Emit only after transaction is committed
+  this.kitchenGateway.server
+    .to('/kitchen')
+    .emit('order:new', { orderId: order.id, tableId: order.tableId, items: order.items });
+
+  return order;
+}
+```
+
+```typescript
+// ❌ WRONG — emitting inside the transaction (may emit even if tx rolls back)
+return this.prisma.$transaction(async (tx) => {
+  const order = await tx.order.create({ ... });
+  this.kitchenGateway.server.emit('order:new', order); // dangerous
+  return order;
+});
+```
+
+## Frontend — Cache Update via Socket
+
+```typescript
+// ✅ CORRECT — update TanStack Query cache from socket event
+useEffect(() => {
+  socket.on('table:status_changed', (payload: TableStatusPayload) => {
+    queryClient.setQueryData(['tables', payload.tableId], (old: Table) => ({
+      ...old,
+      status: payload.status,
+    }));
+  });
+  return () => { socket.off('table:status_changed'); };
+}, [queryClient]);
+```
+
+## Rules
+- ✅ Socket events must use `namespace:verb` naming (`order:new`, `table:status_changed`)
+- ✅ All socket payloads must be typed with shared interfaces from `packages/shared`
+- ❌ NEVER emit socket events inside a `$transaction` block
+- ❌ NEVER mutate Zustand store directly from socket events — update TanStack Query cache instead

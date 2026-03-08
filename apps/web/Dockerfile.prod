@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1 — deps
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json        ./apps/web/
+COPY packages/shared/package.json ./packages/shared/
+
+RUN npm ci --prefer-offline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 — builder
+#   Build the Next.js app with `output: 'standalone'`.
+#   The standalone build copies only the files needed to run the server,
+#   dramatically reducing the final image size (~50–80 MB vs ~500 MB).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM deps AS builder
+
+WORKDIR /app
+
+COPY packages/shared ./packages/shared
+COPY apps/web        ./apps/web
+
+# Build-time public env vars (non-secret; baked into the JS bundle)
+ARG NEXT_PUBLIC_WS_URL
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_DEMO_BRANCH_ID
+# Mock mode is always OFF in production
+ARG NEXT_PUBLIC_MOCK_MODE=false
+
+ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_DEMO_BRANCH_ID=${NEXT_PUBLIC_DEMO_BRANCH_ID}
+ENV NEXT_PUBLIC_MOCK_MODE=false
+ENV NODE_ENV=production
+# Disable Next.js telemetry during build
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN cd apps/web && npm run build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3 — runner
+#   Only the standalone server output + static assets.
+#   Non-root `node` user, ~120 MB final image.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+
+RUN apk add --no-cache libc6-compat
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+
+# Non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 nextjs
+
+WORKDIR /app
+
+# Copy the standalone server bundle produced by Next.js
+# (includes its own minimal node_modules — no separate install needed)
+COPY --chown=nextjs:nodejs --from=builder /app/apps/web/.next/standalone ./
+
+# Copy static files (images, fonts, etc.)
+COPY --chown=nextjs:nodejs --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# Copy the public directory (robots.txt, manifest.json, icons, etc.)
+COPY --chown=nextjs:nodejs --from=builder /app/apps/web/public ./apps/web/public
+
+USER nextjs
+
+EXPOSE 3000
+
+# Next.js standalone entrypoint: apps/web/server.js
+CMD ["node", "apps/web/server.js"]
