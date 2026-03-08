@@ -4,7 +4,7 @@
 # Trigger: push to `main` branch
 #
 # Required GitHub Secrets:
-#   REGISTRY_TOKEN            — GitHub / Docker Hub token to push images
+#   (For GHCR push we use the default GITHUB_TOKEN — no REGISTRY_TOKEN needed.)
 #   VPS_HOST                  — VPS IP or hostname
 #   VPS_USER                  — SSH user (e.g. "deploy")
 #   VPS_SSH_KEY               — Private SSH key (PEM format)
@@ -84,7 +84,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract image metadata
         id: meta
